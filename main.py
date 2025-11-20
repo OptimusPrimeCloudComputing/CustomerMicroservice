@@ -2,199 +2,410 @@ from __future__ import annotations
 
 import os
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, UTC
-from typing import Dict, List
-from typing import Optional
+from typing import List, Dict
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi import Query, Path
 from starlette.responses import JSONResponse
 
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
 from models.customer import CustomerRead, CustomerCreate, CustomerUpdate
 from models.health import Health
 
-port = int(os.environ.get("FASTAPIPORT", 8000))
+port = int(os.environ.get("FASTAPIPORT", 8002))
 
-# -----------------------------------------------------------------------------
-# Fake in-memory "databases"
-# -----------------------------------------------------------------------------
+CUSTOMER_SERVICE_URL = os.environ.get("CUSTOMER_SERVICE_URL", "http://localhost:8000")
+ADDRESS_SERVICE_URL = os.environ.get("ADDRESS_SERVICE_URL", "http://localhost:8001")
+
+executor = ThreadPoolExecutor(max_workers=4)
 
 app = FastAPI(
-    title="Customer API",
-    description="Service for managing customer data",
+    title="Customer Composite API",
+    description="Composite microservice for customers and their addresses.",
     version="0.0.1",
 )
-
-# -----------------------------------------------------------------------------
-# Customer Management endpoints
-# -----------------------------------------------------------------------------
 
 def make_health() -> Health:
     return Health(
         status=200,
         status_message="OK",
         timestamp=datetime.now(UTC).isoformat() + "Z",
-        ip_address=socket.gethostbyname(socket.gethostname())
+        ip_address=socket.gethostbyname(socket.gethostname()),
     )
 
 @app.get("/health", response_model=Health)
 def get_health():
     return make_health()
 
+
+def fetch_customer_atomic(university_id: str) -> Dict:
+    try:
+        resp = httpx.get(
+            f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Customer service unavailable")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return resp.json()
+
+
+def fetch_addresses_atomic(university_id: str) -> List[Dict]:
+    try:
+        resp = httpx.get(
+            f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses",
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Address service unavailable")
+
+    if resp.status_code >= 400:
+        # For simplicity, surface atomic error directly
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# COMPOSITE: Customer endpoints
+# ---------------------------------------------------------------------------
+
 @app.post("/customers", response_model=CustomerRead, status_code=201)
 def create_customer(customer: CustomerCreate):
     """
-    Dummy implementation: returns a CustomerRead object without saving to a real database.
+    Composite create:
+    - Create customer in Customer Atomic (without addresses).
+    - Then create associated addresses in Address Atomic.
+    - Return aggregated CustomerRead (customer + address list).
     """
+    if customer.university_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="university_id is required to create a customer.",
+        )
+
+    payload = customer.model_dump()
+    address_list = payload.pop("address", [])  # list of plain AddressBase dicts
+    customer_payload = payload
+
+    # 1) Create the customer in the Customer Atomic service
+    try:
+        resp = httpx.post(
+            f"{CUSTOMER_SERVICE_URL}/customers",
+            json=customer_payload,
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Customer service unavailable")
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    customer_data = resp.json()
+    uni_id = customer_data["university_id"]
+
+    # 2) Create addresses in Address Atomic
+    created_addresses: List[AddressBase] = []
+    for addr in address_list:
+        addr_payload = {
+            "university_id": uni_id,
+            **addr,
+        }
+        try:
+            addr_resp = httpx.post(
+                f"{ADDRESS_SERVICE_URL}/addresses",
+                json=addr_payload,
+                timeout=5.0,
+            )
+        except httpx.RequestError:
+            raise HTTPException(status_code=502, detail="Address service unavailable")
+
+        if addr_resp.status_code >= 400:
+            raise HTTPException(status_code=addr_resp.status_code, detail=addr_resp.text)
+
+        addr_data = addr_resp.json()
+        created_addresses.append(
+            AddressBase(
+                street=addr_data["street"],
+                city=addr_data["city"],
+                state=addr_data["state"],
+                postal_code=addr_data["postal_code"],
+                country=addr_data["country"],
+            )
+        )
+
+    # 3) Build composite CustomerRead
+    base_fields = {
+        k: v
+        for k, v in customer_data.items()
+        if k not in ("customer_id", "address")
+    }
+
     return CustomerRead(
         customer_id=uuid4(),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        **customer.model_dump()
+        address=created_addresses,
+        **base_fields,
     )
 
-@app.get("/customers/{customer_id}", response_model=CustomerRead)
-def get_customer_by_id(customer_id: str):
-    return CustomerRead(
-        customer_id=uuid4(),
-        first_name="Rahul",
-        middle_name="K.",
-        last_name="Singh",
-        university_id="UNI0001",
-        email="rahul.singh@columbia.edu",
-        phone="+1-555-123-4567",
-        birth_date=datetime(1995, 5, 20).date(),
-        status="active",
-        address=[
-            AddressBase(
-                street="123 Broadway Ave",
-                city="New York",
-                state="NY",
-                postal_code="10027",
-                country="USA",
-            )
-        ],
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
 
-@app.patch("/courses/{customer_id}", response_model=CustomerRead)
-def update_customer(customer_id: str, update: CustomerUpdate):
-    existing = CustomerRead(
-        customer_id=uuid4(),
-        first_name="Rahul",
-        middle_name="K.",
-        last_name="Singh",
-        university_id="UNI0001",
-        email="rahul.singh@columbia.edu",
-        phone="+1-555-123-4567",
-        birth_date=datetime(1995, 5, 20).date(),
-        status="active",
-        address=[
-            AddressBase(
-                street="123 Broadway Ave",
-                city="New York",
-                state="NY",
-                postal_code="10027",
-                country="USA",
-            )
-        ],
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-
-    # Merge updates into the existing record
-    data = existing.model_dump()
-    data.update(update.model_dump(exclude_unset=True))
-    data["updated_at"] = datetime.now(UTC)
-
-    return CustomerRead(**data)
-
-@app.delete("/courses/{customer_id}", status_code=204)
-def delete_customer(customer_id: str):
-    return JSONResponse(status_code=204, content=None)
-
-# -----------------------------------------------------------------------------
-# Address endpoints
-# -----------------------------------------------------------------------------
-@app.post("/addresses", response_model=AddressRead, status_code=201)
-def create_address(address: AddressCreate):
+@app.get("/customers/{university_id}", response_model=CustomerRead)
+def get_customer(university_id: str):
     """
-    Dummy implementation: returns an AddressRead with generated ID and timestamps.
-    """
-    return AddressRead(
-        address_id=uuid4(),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        **address.model_dump()
-    )
+    Composite read:
 
-@app.get("/customers/{customer_id}/addresses", response_model=List[AddressRead])
-def list_customer_addresses(customer_id: str):
+    USES THREADS:
+    - In parallel, fetch:
+        * Customer from Customer Atomic
+        * Addresses from Address Atomic
+    - Aggregate into a single CustomerRead object.
     """
-    Dummy implementation: returns a static list of addresses for the given customer_id.
-    """
-    # Return a dummy list of addresses
-    return [
-        AddressRead(
-            address_id=uuid4(),
-            street="123 Broadway Ave",
-            city="New York",
-            state="NY",
-            postal_code="10027",
-            country="USA",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        ),
-        AddressRead(
-            address_id=uuid4(),
-            street="456 Elm Street",
-            city="Boston",
-            state="MA",
-            postal_code="02118",
-            country="USA",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        ),
+    future_customer = executor.submit(fetch_customer_atomic, university_id)
+    future_addresses = executor.submit(fetch_addresses_atomic, university_id)
+
+    customer_data = future_customer.result()
+    addresses_data = future_addresses.result()
+
+    address_objs = [
+        AddressBase(
+            street=a["street"],
+            city=a["city"],
+            state=a["state"],
+            postal_code=a["postal_code"],
+            country=a["country"],
+        )
+        for a in addresses_data
     ]
 
-@app.patch("/customers/{customer_id}/addresses/{address_id}",
-           response_model=AddressRead
-           )
-def update_address(customer_id: str, address_id: str, update: AddressUpdate):
-    existing = AddressRead(
-        address_id=uuid4(),
-        street="123 Broadway Ave",
-        city="New York",
-        state="NY",
-        postal_code="10027",
-        country="USA",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+    base_fields = {
+        k: v
+        for k, v in customer_data.items()
+        if k not in ("customer_id", "address")
+    }
+
+    return CustomerRead(
+        customer_id=uuid4(),
+        address=address_objs,
+        **base_fields,
     )
 
-    data = existing.model_dump()
-    data.update(update.model_dump(exclude_unset=True))
-    data["updated_at"] = datetime.now(UTC)
 
-    return AddressRead(**data)
+@app.patch("/customers/{university_id}", response_model=CustomerRead)
+def update_customer(university_id: str, update: CustomerUpdate):
+    """
+    Composite update:
 
-@app.delete("/customers/{customer_id}/addresses/{address_id}", status_code=204)
-def delete_address(address_uni: str):
-    return
+    - PATCH core customer fields in Customer Atomic.
+    - Addresses are managed using separate endpoints.
+    - Then call composite GET to return the updated aggregated view.
+    """
+    update_data = update.model_dump(exclude_unset=True)
+    update_data.pop("address", None)  # address handled separately
 
-# -----------------------------------------------------------------------------
+    try:
+        resp = httpx.patch(
+            f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
+            json=update_data,
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Customer service unavailable")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    # Return fresh aggregated view
+    return get_customer(university_id)
+
+
+@app.delete("/customers/{university_id}", status_code=204)
+def delete_customer(university_id: str):
+    """
+    Composite delete:
+
+    - Delete all addresses for this customer in Address Atomic.
+    - Delete the customer in Customer Atomic.
+    """
+    try:
+        addr_resp = httpx.delete(
+            f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses",
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Address service unavailable")
+
+    if addr_resp.status_code not in (200, 204, 404):
+        raise HTTPException(status_code=addr_resp.status_code, detail=addr_resp.text)
+
+    try:
+        cust_resp = httpx.delete(
+            f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Customer service unavailable")
+
+    if cust_resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if cust_resp.status_code >= 400:
+        raise HTTPException(status_code=cust_resp.status_code, detail=cust_resp.text)
+
+    return JSONResponse(status_code=204, content=None)
+
+
+# ---------------------------------------------------------------------------
+# COMPOSITE: Address endpoints (with logical FK check)
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/customers/{university_id}/addresses",
+    response_model=AddressRead,
+    status_code=201,
+)
+def create_address_for_customer(university_id: str, address: AddressCreate):
+    """
+    Composite create-address:
+    - ENFORCES LOGICAL FOREIGN KEY:
+        First verifies that the customer with this university_id exists
+        by calling Customer Atomic.
+    - Then creates the address in Address Atomic.
+    """
+    # FK check: will raise HTTPException(404) if not found
+    fetch_customer_atomic(university_id)
+
+    # Ensure body university_id (if present) is consistent
+    addr_payload = address.model_dump()
+    body_uni = addr_payload.get("university_id")
+    if body_uni is not None and body_uni != university_id:
+        raise HTTPException(
+            status_code=400,
+            detail="university_id in path and body must match.",
+        )
+
+    # Force correct FK
+    addr_payload["university_id"] = university_id
+
+    try:
+        resp = httpx.post(
+            f"{ADDRESS_SERVICE_URL}/addresses",
+            json=addr_payload,
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Address service unavailable")
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return AddressRead(**resp.json())
+
+
+@app.get(
+    "/customers/{university_id}/addresses",
+    response_model=List[AddressRead],
+)
+def list_customer_addresses(university_id: str):
+    """
+    Composite list-addresses:
+    """
+    addresses_data = fetch_addresses_atomic(university_id)
+    return [AddressRead(**a) for a in addresses_data]
+
+
+@app.patch(
+    "/customers/{university_id}/addresses/{address_id}",
+    response_model=AddressRead,
+)
+def update_address_for_customer(
+    university_id: str,
+    address_id: str,
+    update: AddressUpdate,
+):
+    """
+    Composite update-address:
+
+    - Delegates to Address Atomic PATCH /customers/{university_id}/addresses/{address_id}
+    - Atomic service ensures the (university_id, address_id) relationship is valid.
+    """
+    update_data = update.model_dump(exclude_unset=True)
+
+    try:
+        resp = httpx.patch(
+            f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses/{address_id}",
+            json=update_data,
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Address service unavailable")
+
+    if resp.status_code == 404:
+        raise HTTPException(
+            status_code=404,
+            detail="Address not found for this university_id",
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return AddressRead(**resp.json())
+
+
+@app.delete(
+    "/customers/{university_id}/addresses/{address_id}",
+    status_code=204,
+)
+def delete_address_for_customer(university_id: str, address_id: str):
+    """
+    Composite delete-address:
+
+    - Delegates to Address Atomic DELETE /customers/{university_id}/addresses/{address_id}
+    """
+    try:
+        resp = httpx.delete(
+            f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses/{address_id}",
+            timeout=5.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Address service unavailable")
+
+    if resp.status_code == 404:
+        raise HTTPException(
+            status_code=404,
+            detail="Address not found for this university_id",
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return JSONResponse(status_code=204, content=None)
+
+
+# ---------------------------------------------------------------------------
 # Root
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
 @app.get("/")
 def root():
-    return {"message": "Welcome to the Columbia's Second hand store API. See /docs for OpenAPI UI."}
+    return {
+        "message": "Customer Composite Service. See /docs for OpenAPI UI.",
+        "atomic_services": {
+            "customer": CUSTOMER_SERVICE_URL,
+            "address": ADDRESS_SERVICE_URL,
+        },
+    }
 
-# -----------------------------------------------------------------------------
-# Entrypoint for `python main.py`
-# -----------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     import uvicorn
 

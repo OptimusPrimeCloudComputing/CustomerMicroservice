@@ -3,14 +3,25 @@ from __future__ import annotations
 from typing import Optional, List
 from uuid import UUID, uuid4
 from datetime import date, datetime
+
 from pydantic import BaseModel, Field, StringConstraints
 from typing_extensions import Annotated
 
 from .address import AddressBase
 
 # Email must end with .edu
-EduEmail = Annotated[str, StringConstraints(pattern=r"^[\w\.-]+@[\w\.-]+\.edu$", strip_whitespace=True)]
-CourseIDType = Annotated[str, StringConstraints(pattern=r"^[A-Z]{2,4}\d{3,4}$")]
+EduEmail = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[\w\.-]+@[\w\.-]+\.edu$",
+        strip_whitespace=True,
+    ),
+]
+
+UniversityIDType = Annotated[
+    str,
+    StringConstraints(pattern=r"^[A-Z]{2,4}\d{3,4}$"),  # e.g. UNI1234, CS4111
+]
 
 
 class CustomerBase(BaseModel):
@@ -30,7 +41,7 @@ class CustomerBase(BaseModel):
         json_schema_extra={"example": "Singh"},
     )
 
-    university_id: Optional[CourseIDType] = Field(
+    university_id: Optional[UniversityIDType] = Field(
         None,
         description="University ID",
         json_schema_extra={"example": "UNI1234"},
@@ -39,12 +50,12 @@ class CustomerBase(BaseModel):
     email: EduEmail = Field(
         ...,
         description="Must be a valid .edu email address.",
-        json_schema_extra={"example": "rahul@columbia.edu"},
+        json_schema_extra={"example": "student@columbia.edu"},
     )
     phone: Optional[str] = Field(
         None,
         description="Contact phone number.",
-        json_schema_extra={"example": "+1-646-895-5796"},
+        json_schema_extra={"example": "+1-234-567-8910"},
     )
 
     address: List[AddressBase] = Field(
@@ -83,7 +94,7 @@ class CustomerBase(BaseModel):
                 "last_name": "Singh",
                 "university_id": "UNI1234",
                 "email": "rahul@columbia.edu",
-                "phone": "+1-646-895-5796",
+                "phone": "+1-234-567-8910",
                 "birth_date": "2000-07-15",
                 "status": "active",
                 "address": [
@@ -101,7 +112,6 @@ class CustomerBase(BaseModel):
 
 
 class CustomerCreate(CustomerBase):
-    """Creation payload for a Customer."""
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -131,15 +141,50 @@ class CustomerCreate(CustomerBase):
 
 class CustomerUpdate(BaseModel):
     """Partial update for a Customer; supply only fields to change."""
-    first_name: Optional[str] = Field(None, description="Given name.", json_schema_extra={"example": "Rahul"})
-    middle_name: Optional[str] = Field(None, description="Middle name.", json_schema_extra={"example": "Kumar"})
-    last_name: Optional[str] = Field(None, description="Family name.", json_schema_extra={"example": "Singh"})
-    university_id: Optional[str] = Field(None, description="University ID.", json_schema_extra={"example": "UNI1234"})
-    email: Optional[EduEmail] = Field(None, description=".edu email.", json_schema_extra={"example": "rahul@columbia.edu"})
-    phone: Optional[str] = Field(None, description="Contact phone.", json_schema_extra={"example": "+1-646-895-5796"})
-    address: Optional[List[AddressBase]] = Field(None, description="List of mailing addresses.")
-    birth_date: Optional[date] = Field(None, description="DOB (YYYY-MM-DD).", json_schema_extra={"example": "2000-07-15"})
-    status: Optional[str] = Field(None, description="Customer status.", json_schema_extra={"example": "inactive"})
+    first_name: Optional[str] = Field(
+        None,
+        description="Given name.",
+        json_schema_extra={"example": "Rahul"},
+    )
+    middle_name: Optional[str] = Field(
+        None,
+        description="Middle name.",
+        json_schema_extra={"example": "Kumar"},
+    )
+    last_name: Optional[str] = Field(
+        None,
+        description="Family name.",
+        json_schema_extra={"example": "Singh"},
+    )
+    university_id: Optional[UniversityIDType] = Field(
+        None,
+        description="University ID.",
+        json_schema_extra={"example": "UNI1234"},
+    )
+    email: Optional[EduEmail] = Field(
+        None,
+        description=".edu email.",
+        json_schema_extra={"example": "rahul@columbia.edu"},
+    )
+    phone: Optional[str] = Field(
+        None,
+        description="Contact phone.",
+        json_schema_extra={"example": "+1-646-895-5796"},
+    )
+    address: Optional[List[AddressBase]] = Field(
+        None,
+        description="List of mailing addresses.",
+    )
+    birth_date: Optional[date] = Field(
+        None,
+        description="DOB (YYYY-MM-DD).",
+        json_schema_extra={"example": "2000-07-15"},
+    )
+    status: Optional[str] = Field(
+        None,
+        description="Customer status.",
+        json_schema_extra={"example": "inactive"},
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -148,17 +193,17 @@ class CustomerUpdate(BaseModel):
                 "middle_name": "K.",
                 "last_name": "Singh",
                 "email": "rahul@columbia.edu",
-                "status": "inactive"
+                "status": "inactive",
             }
         }
     }
 
 
 class CustomerRead(CustomerBase):
-    """Server representation returned to clients."""
+    """Server representation returned to clients (composite view)."""
     customer_id: UUID = Field(
         default_factory=uuid4,
-        description="System-generated unique Customer ID.",
+        description="Composite-level Customer ID.",
         json_schema_extra={"example": "99999999-9999-4999-8999-999999999999"},
     )
     created_at: datetime = Field(
@@ -180,7 +225,7 @@ class CustomerRead(CustomerBase):
                     "first_name": "Rahul",
                     "middle_name": "Kumar",
                     "last_name": "Singh",
-                    "university_id": "UNI123456",
+                    "university_id": "UNI1234",
                     "email": "rahul@columbia.edu",
                     "phone": "+1-646-895-5796",
                     "birth_date": "2000-07-15",

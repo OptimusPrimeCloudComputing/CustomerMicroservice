@@ -4,7 +4,13 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+from typing_extensions import Annotated
+
+# University ID like UNI1234
+UniversityIDType = Annotated[
+    str,StringConstraints(pattern=r"^[A-Z]{2,4}\d{3,4}$"),
+]
 
 
 class AddressBase(BaseModel):
@@ -48,11 +54,17 @@ class AddressBase(BaseModel):
 
 
 class AddressCreate(AddressBase):
-    """Payload for creating a new address."""
+    university_id: UniversityIDType = Field(
+        ...,
+        description="University ID of the customer this address belongs to.",
+        json_schema_extra={"example": "UNI1234"},
+    )
+
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
+                    "university_id": "UNI1234",
                     "street": "123 Broadway Ave",
                     "city": "New York",
                     "state": "NY",
@@ -65,29 +77,52 @@ class AddressCreate(AddressBase):
 
 
 class AddressUpdate(BaseModel):
-    """Partial update for an Address; supply only fields to change."""
-    street: Optional[str] = Field(None, description="Street address", json_schema_extra={"example": "456 Elm St"})
-    city: Optional[str] = Field(None, description="City name", json_schema_extra={"example": "Boston"})
-    state: Optional[str] = Field(None, description="State or region", json_schema_extra={"example": "MA"})
-    postal_code: Optional[str] = Field(None, description="ZIP or postal code", json_schema_extra={"example": "02118"})
-    country: Optional[str] = Field(None, description="Country name", json_schema_extra={"example": "USA"})
+    street: Optional[str] = Field(
+        None,
+        description="Street address",
+        json_schema_extra={"example": "456 Elm St"},
+    )
+    city: Optional[str] = Field(
+        None,
+        description="City name",
+        json_schema_extra={"example": "Boston"},
+    )
+    state: Optional[str] = Field(
+        None,
+        description="State or region",
+        json_schema_extra={"example": "MA"},
+    )
+    postal_code: Optional[str] = Field(
+        None,
+        description="ZIP or postal code",
+        json_schema_extra={"example": "02118"},
+    )
+    country: Optional[str] = Field(
+        None,
+        description="Country name",
+        json_schema_extra={"example": "USA"},
+    )
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "city": "Boston",
-                "state": "MA"
+                "state": "MA",
             }
         }
     }
 
 
 class AddressRead(AddressBase):
-    """Server representation returned to clients."""
     address_id: UUID = Field(
         default_factory=uuid4,
         description="System-generated unique Address ID.",
         json_schema_extra={"example": "99999999-9999-4999-8999-999999999999"},
+    )
+    university_id: UniversityIDType = Field(
+        ...,
+        description="University ID of the owning customer.",
+        json_schema_extra={"example": "UNI1234"},
     )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
@@ -105,6 +140,7 @@ class AddressRead(AddressBase):
             "examples": [
                 {
                     "address_id": "99999999-9999-4999-8999-999999999999",
+                    "university_id": "UNI1234",
                     "street": "123 Broadway Ave",
                     "city": "New York",
                     "state": "NY",

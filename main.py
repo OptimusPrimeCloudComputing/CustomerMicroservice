@@ -92,7 +92,7 @@ def create_customer(customer: CustomerCreate):
             detail="university_id is required to create a customer.",
         )
 
-    payload = customer.model_dump()
+    payload = customer.model_dump(mode='json')
     address_list = payload.pop("address", [])  # list of plain AddressBase dicts
     customer_payload = payload
 
@@ -206,7 +206,7 @@ def update_customer(university_id: str, update: CustomerUpdate):
     - Addresses are managed using separate endpoints.
     - Then call composite GET to return the updated aggregated view.
     """
-    update_data = update.model_dump(exclude_unset=True)
+    update_data = update.model_dump(mode='json', exclude_unset=True)
     update_data.pop("address", None)  # address handled separately
 
     try:
@@ -283,7 +283,7 @@ def create_address_for_customer(university_id: str, address: AddressCreate):
     fetch_customer_atomic(university_id)
 
     # Ensure body university_id (if present) is consistent
-    addr_payload = address.model_dump()
+    addr_payload = address.model_dump(mode='json')
     body_uni = addr_payload.get("university_id")
     if body_uni is not None and body_uni != university_id:
         raise HTTPException(
@@ -336,7 +336,7 @@ def update_address_for_customer(
     - Delegates to Address Atomic PATCH /customers/{university_id}/addresses/{address_id}
     - Atomic service ensures the (university_id, address_id) relationship is valid.
     """
-    update_data = update.model_dump(exclude_unset=True)
+    update_data = update.model_dump(mode='json', exclude_unset=True)
 
     try:
         resp = httpx.patch(

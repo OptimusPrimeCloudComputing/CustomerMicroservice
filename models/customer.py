@@ -121,7 +121,7 @@ class CustomerCreate(CustomerBase):
                     "last_name": "Singh",
                     "university_id": "UNI1234",
                     "email": "rahul@columbia.edu",
-                    "phone": "+1-646-895-5796",
+                    "phone": "+1-234-567-8910",
                     "birth_date": "2000-07-15",
                     "status": "active",
                     "address": [
@@ -169,7 +169,7 @@ class CustomerUpdate(BaseModel):
     phone: Optional[str] = Field(
         None,
         description="Contact phone.",
-        json_schema_extra={"example": "+1-646-895-5796"},
+        json_schema_extra={"example": "+1-234-567-8910"},
     )
     address: Optional[List[AddressBase]] = Field(
         None,
@@ -227,7 +227,7 @@ class CustomerRead(CustomerBase):
                     "last_name": "Singh",
                     "university_id": "UNI1234",
                     "email": "rahul@columbia.edu",
-                    "phone": "+1-646-895-5796",
+                    "phone": "+1-234-567-8910",
                     "birth_date": "2000-07-15",
                     "status": "active",
                     "address": [

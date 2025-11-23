@@ -45,12 +45,18 @@ def get_health():
 
 def fetch_customer_atomic(university_id: str) -> Dict:
     try:
+        print(CUSTOMER_SERVICE_URL)
         resp = httpx.get(
             f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
             timeout=15.0,
         )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Customer service unavailable")
+    except httpx.RequestError as exc:
+        print(f"Customer service request failed: {exc!r}")
+        logger.exception("Customer service request failed.")
+        raise HTTPException(status_code=502, detail=f"Customer service unavailable: {exc}")
+
+    # except httpx.RequestError:
+    #     raise HTTPException(status_code=502, detail="Customer service unavailable")
 
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Customer not found")

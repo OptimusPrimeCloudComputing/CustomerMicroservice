@@ -14,11 +14,13 @@ from starlette.responses import JSONResponse
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
 from models.customer import CustomerRead, CustomerCreate, CustomerUpdate
 from models.health import Health
+import logging
+logger = logging.getLogger(__name__)
 
 port = int(os.environ.get("FASTAPIPORT", 8002))
 
-CUSTOMER_SERVICE_URL = os.environ.get("CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app")
-ADDRESS_SERVICE_URL = os.environ.get("ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app")
+CUSTOMER_SERVICE_URL = os.environ.get("CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app/")
+ADDRESS_SERVICE_URL = os.environ.get("ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app/")
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -45,7 +47,7 @@ def fetch_customer_atomic(university_id: str) -> Dict:
     try:
         resp = httpx.get(
             f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Customer service unavailable")
@@ -62,7 +64,7 @@ def fetch_addresses_atomic(university_id: str) -> List[Dict]:
     try:
         resp = httpx.get(
             f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses",
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Address service unavailable")
@@ -97,14 +99,21 @@ def create_customer(customer: CustomerCreate):
     customer_payload = payload
 
     # 1) Create the customer in the Customer Atomic service
+    print(f"{CUSTOMER_SERVICE_URL}/customers")
     try:
         resp = httpx.post(
             f"{CUSTOMER_SERVICE_URL}/customers",
             json=customer_payload,
-            timeout=5.0,
+            timeout=15.0,
         )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Customer service unavailable")
+    # except httpx.RequestError:
+    #     raise HTTPException(status_code=502, detail="Customer service unavailable")
+    except httpx.RequestError as exc:
+        # Print to console (optional)
+        print(f"Customer service request failed: {exc!r}")
+        # Preferred: structured log with stack trace
+        logger.exception("Customer service request failed.")
+        raise HTTPException(status_code=502, detail=f"Customer service unavailable: {exc}")
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
@@ -123,7 +132,7 @@ def create_customer(customer: CustomerCreate):
             addr_resp = httpx.post(
                 f"{ADDRESS_SERVICE_URL}/addresses",
                 json=addr_payload,
-                timeout=5.0,
+                timeout=15.0,
             )
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="Address service unavailable")
@@ -213,7 +222,7 @@ def update_customer(university_id: str, update: CustomerUpdate):
         resp = httpx.patch(
             f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
             json=update_data,
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Customer service unavailable")
@@ -238,7 +247,7 @@ def delete_customer(university_id: str):
     try:
         addr_resp = httpx.delete(
             f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses",
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Address service unavailable")
@@ -249,7 +258,7 @@ def delete_customer(university_id: str):
     try:
         cust_resp = httpx.delete(
             f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Customer service unavailable")
@@ -298,7 +307,7 @@ def create_address_for_customer(university_id: str, address: AddressCreate):
         resp = httpx.post(
             f"{ADDRESS_SERVICE_URL}/addresses",
             json=addr_payload,
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Address service unavailable")
@@ -342,7 +351,7 @@ def update_address_for_customer(
         resp = httpx.patch(
             f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses/{address_id}",
             json=update_data,
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Address service unavailable")
@@ -371,7 +380,7 @@ def delete_address_for_customer(university_id: str, address_id: str):
     try:
         resp = httpx.delete(
             f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses/{address_id}",
-            timeout=5.0,
+            timeout=15.0,
         )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Address service unavailable")

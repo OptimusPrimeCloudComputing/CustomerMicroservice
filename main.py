@@ -10,7 +10,7 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI, HTTPException
 from starlette.responses import JSONResponse
-
+from fastapi.middleware.cors import CORSMiddleware
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
 from models.customer import CustomerRead, CustomerCreate, CustomerUpdate
 from models.health import Health
@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 port = int(os.environ.get("FASTAPIPORT", 8002))
 
-CUSTOMER_SERVICE_URL = os.environ.get("CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app/")
-ADDRESS_SERVICE_URL = os.environ.get("ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app/")
+CUSTOMER_SERVICE_URL = os.environ.get("CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app")
+ADDRESS_SERVICE_URL = os.environ.get("ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app")
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -28,6 +28,14 @@ app = FastAPI(
     title="Customer Composite API",
     description="Composite microservice for customers and their addresses.",
     version="0.0.1",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 def make_health() -> Health:
@@ -55,9 +63,6 @@ def fetch_customer_atomic(university_id: str) -> Dict:
         logger.exception("Customer service request failed.")
         raise HTTPException(status_code=502, detail=f"Customer service unavailable: {exc}")
 
-    # except httpx.RequestError:
-    #     raise HTTPException(status_code=502, detail="Customer service unavailable")
-
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Customer not found")
     if resp.status_code >= 400:
@@ -76,15 +81,14 @@ def fetch_addresses_atomic(university_id: str) -> List[Dict]:
         raise HTTPException(status_code=502, detail="Address service unavailable")
 
     if resp.status_code >= 400:
-        # For simplicity, surface atomic error directly
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
     return resp.json()
 
 
-# ---------------------------------------------------------------------------
+# ------------------------------
 # COMPOSITE: Customer endpoints
-# ---------------------------------------------------------------------------
+# ------------------------------
 
 @app.post("/customers", response_model=CustomerRead, status_code=201)
 def create_customer(customer: CustomerCreate):
@@ -101,7 +105,7 @@ def create_customer(customer: CustomerCreate):
         )
 
     payload = customer.model_dump(mode='json')
-    address_list = payload.pop("address", [])  # list of plain AddressBase dicts
+    address_list = payload.pop("address", [])
     customer_payload = payload
 
     # 1) Create the customer in the Customer Atomic service
@@ -112,12 +116,9 @@ def create_customer(customer: CustomerCreate):
             json=customer_payload,
             timeout=15.0,
         )
-    # except httpx.RequestError:
-    #     raise HTTPException(status_code=502, detail="Customer service unavailable")
+
     except httpx.RequestError as exc:
-        # Print to console (optional)
         print(f"Customer service request failed: {exc!r}")
-        # Preferred: structured log with stack trace
         logger.exception("Customer service request failed.")
         raise HTTPException(status_code=502, detail=f"Customer service unavailable: {exc}")
 
@@ -222,7 +223,7 @@ def update_customer(university_id: str, update: CustomerUpdate):
     - Then call composite GET to return the updated aggregated view.
     """
     update_data = update.model_dump(mode='json', exclude_unset=True)
-    update_data.pop("address", None)  # address handled separately
+    update_data.pop("address", None)
 
     try:
         resp = httpx.patch(
@@ -238,7 +239,6 @@ def update_customer(university_id: str, update: CustomerUpdate):
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-    # Return fresh aggregated view
     return get_customer(university_id)
 
 
@@ -402,9 +402,9 @@ def delete_address_for_customer(university_id: str, address_id: str):
     return JSONResponse(status_code=204, content=None)
 
 
-# ---------------------------------------------------------------------------
+# -----
 # Root
-# ---------------------------------------------------------------------------
+# -----
 
 @app.get("/")
 def root():
@@ -415,11 +415,6 @@ def root():
             "address": ADDRESS_SERVICE_URL,
         },
     }
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn

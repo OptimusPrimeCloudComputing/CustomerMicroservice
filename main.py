@@ -8,7 +8,8 @@ from typing import List, Dict
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Request
+import base64
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
@@ -58,6 +59,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# PUB/SUB GCP
+
+@app.post("/pubsub/push")
+async def pubsub_push(request: Request):
+    envelope = await request.json()
+
+    if "message" not in envelope:
+        return {"status": "invalid pubsub message"}
+
+    message = envelope["message"]
+    data = message.get("data")
+
+    if data:
+        decoded = base64.b64decode(data).decode("utf-8")
+        print("Received pubsub message:", decoded)
+
+    return {"status": "ok"}
 
 # Pub/Sub helper
 def publish_event(event_type: str, payload: dict) -> None:

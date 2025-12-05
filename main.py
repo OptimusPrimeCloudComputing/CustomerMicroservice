@@ -16,6 +16,27 @@ from models.customer import CustomerRead, CustomerCreate, CustomerUpdate
 from models.health import Health
 import logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+import json
+from google.cloud import pubsub_v1
+
+PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS")
+
+if PROJECT_ID and PUBSUB_TOPIC:
+    publisher: pubsub_v1.PublisherClient | None = pubsub_v1.PublisherClient()
+    TOPIC_PATH: str | None = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC)
+    logger.info(
+        "Pub/Sub enabled for composite: project=%s topic=%s",
+        PROJECT_ID,
+        PUBSUB_TOPIC,
+    )
+else:
+    publisher = None
+    TOPIC_PATH = None
+    logger.warning(
+        "Pub/Sub DISABLED for composite: GCP_PROJECT_ID or PUBSUB_TOPIC_CUSTOMER_EVENTS not set"
+    )
 
 port = int(os.environ.get("FASTAPIPORT", 8002))
 
@@ -37,6 +58,48 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Pub/Sub helper
+def publish_event(event_type: str, payload: dict) -> None:
+    if not publisher or not TOPIC_PATH:
+        logger.info(
+            "Pub/Sub disabled; skipping publish for event_type=%s", event_type
+        )
+        return
+
+    try:
+        data = json.dumps(payload, default=str).encode("utf-8")
+        attributes = {
+            "event_type": event_type,
+        }
+        uni = payload.get("university_id")
+        if uni:
+            attributes["university_id"] = str(uni)
+
+        future = publisher.publish(
+            TOPIC_PATH,
+            data=data,
+            **attributes,
+        )
+
+        def _on_done(f):
+            try:
+                msg_id = f.result()
+                logger.info(
+                    "Published Pub/Sub event_type=%s message_id=%s",
+                    event_type,
+                    msg_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Pub/Sub publish callback failed for event_type=%s", event_type
+                )
+
+        future.add_done_callback(_on_done)
+
+    except Exception:
+        logger.exception("Failed to publish Pub/Sub event_type=%s", event_type)
+
 
 def make_health() -> Health:
     return Health(
@@ -86,10 +149,7 @@ def fetch_addresses_atomic(university_id: str) -> List[Dict]:
     return resp.json()
 
 
-# ------------------------------
 # COMPOSITE: Customer endpoints
-# ------------------------------
-
 @app.post("/customers", response_model=CustomerRead, status_code=201)
 def create_customer(customer: CustomerCreate):
     """
@@ -165,11 +225,21 @@ def create_customer(customer: CustomerCreate):
         if k not in ("customer_id", "address")
     }
 
-    return CustomerRead(
+    composite_customer = CustomerRead(
         customer_id=uuid4(),
         address=created_addresses,
         **base_fields,
     )
+
+    try:
+        publish_event(
+            "CustomerCreated",
+            composite_customer.model_dump(mode="json"),
+        )
+    except Exception:
+        logger.exception("Error while publishing CustomerCreated event")
+
+    return composite_customer
 
 
 @app.get("/customers/{university_id}", response_model=CustomerRead)

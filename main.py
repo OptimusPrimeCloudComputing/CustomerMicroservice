@@ -1,4 +1,6 @@
 from __future__ import annotations
+from google.cloud import pubsub_v1
+import json
 
 import os
 import socket
@@ -8,18 +10,21 @@ from typing import List, Dict
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException,Request
+from fastapi import FastAPI, HTTPException, Request, Depends
+from pydantic import BaseModel
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 import base64
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
 from models.customer import CustomerRead, CustomerCreate, CustomerUpdate
 from models.health import Health
+from middleware.auth import get_current_user
+from utils.jwt_utils import create_access_token
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-import json
-from google.cloud import pubsub_v1
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS")
@@ -41,8 +46,10 @@ else:
 
 port = int(os.environ.get("FASTAPIPORT", 8002))
 
-CUSTOMER_SERVICE_URL = os.environ.get("CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app")
-ADDRESS_SERVICE_URL = os.environ.get("ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app")
+CUSTOMER_SERVICE_URL = os.environ.get(
+    "CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app")
+ADDRESS_SERVICE_URL = os.environ.get(
+    "ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app")
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -60,7 +67,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "credential": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+            }
+        }
+    }
+
+
+@app.post("/auth/google")
+async def auth_google(body: GoogleAuthRequest):
+    """Exchange Google ID token for app JWT.
+
+    Expects body: {"credential": "<google_id_token>"}
+    For this assignment, we trust the frontend to send a valid token
+    and extract basic profile claims from it.
+    """
+    credential = body.credential
+    if not credential:
+        raise HTTPException(status_code=400, detail="Missing credential")
+
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+    if not google_client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_CLIENT_ID not configured on server",
+        )
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            google_client_id,
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Google ID token")
+
+    email = idinfo.get("email")
+    name = idinfo.get("name") or "Google User"
+    picture = idinfo.get("picture")
+    sub = idinfo.get("sub")
+
+    # Optional: enforce .edu emails for this app
+    if not email or not email.endswith(".edu"):
+        raise HTTPException(
+            status_code=403, detail="Email must be a .edu address")
+
+    jwt_payload = {
+        "sub": sub,
+        "email": email,
+        "name": name,
+    }
+    app_token = create_access_token(jwt_payload)
+
+    return {
+        "token": app_token,
+        "user": {
+            "id": sub,
+            "email": email,
+            "name": name,
+            "picture": picture,
+        },
+    }
+
 # PUB/SUB GCP
+
 
 @app.post("/pubsub/push")
 async def pubsub_push(request: Request):
@@ -79,6 +155,8 @@ async def pubsub_push(request: Request):
     return {"status": "ok"}
 
 # Pub/Sub helper
+
+
 def publish_event(event_type: str, payload: dict) -> None:
     if not publisher or not TOPIC_PATH:
         logger.info(
@@ -128,6 +206,7 @@ def make_health() -> Health:
         ip_address=socket.gethostbyname(socket.gethostname()),
     )
 
+
 @app.get("/health", response_model=Health)
 def get_health():
     return make_health()
@@ -143,7 +222,8 @@ def fetch_customer_atomic(university_id: str) -> Dict:
     except httpx.RequestError as exc:
         print(f"Customer service request failed: {exc!r}")
         logger.exception("Customer service request failed.")
-        raise HTTPException(status_code=502, detail=f"Customer service unavailable: {exc}")
+        raise HTTPException(
+            status_code=502, detail=f"Customer service unavailable: {exc}")
 
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -160,7 +240,8 @@ def fetch_addresses_atomic(university_id: str) -> List[Dict]:
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Address service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Address service unavailable")
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
@@ -199,7 +280,8 @@ def create_customer(customer: CustomerCreate):
     except httpx.RequestError as exc:
         print(f"Customer service request failed: {exc!r}")
         logger.exception("Customer service request failed.")
-        raise HTTPException(status_code=502, detail=f"Customer service unavailable: {exc}")
+        raise HTTPException(
+            status_code=502, detail=f"Customer service unavailable: {exc}")
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
@@ -221,10 +303,12 @@ def create_customer(customer: CustomerCreate):
                 timeout=15.0,
             )
         except httpx.RequestError:
-            raise HTTPException(status_code=502, detail="Address service unavailable")
+            raise HTTPException(
+                status_code=502, detail="Address service unavailable")
 
         if addr_resp.status_code >= 400:
-            raise HTTPException(status_code=addr_resp.status_code, detail=addr_resp.text)
+            raise HTTPException(
+                status_code=addr_resp.status_code, detail=addr_resp.text)
 
         addr_data = addr_resp.json()
         created_addresses.append(
@@ -262,7 +346,7 @@ def create_customer(customer: CustomerCreate):
 
 
 @app.get("/customers/{university_id}", response_model=CustomerRead)
-def get_customer(university_id: str):
+def get_customer(university_id: str, current_user: dict = Depends(get_current_user)):
     """
     Composite read:
 
@@ -321,7 +405,8 @@ def update_customer(university_id: str, update: CustomerUpdate):
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Customer service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Customer service unavailable")
 
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -345,10 +430,12 @@ def delete_customer(university_id: str):
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Address service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Address service unavailable")
 
     if addr_resp.status_code not in (200, 204, 404):
-        raise HTTPException(status_code=addr_resp.status_code, detail=addr_resp.text)
+        raise HTTPException(
+            status_code=addr_resp.status_code, detail=addr_resp.text)
 
     try:
         cust_resp = httpx.delete(
@@ -356,12 +443,14 @@ def delete_customer(university_id: str):
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Customer service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Customer service unavailable")
 
     if cust_resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Customer not found")
     if cust_resp.status_code >= 400:
-        raise HTTPException(status_code=cust_resp.status_code, detail=cust_resp.text)
+        raise HTTPException(
+            status_code=cust_resp.status_code, detail=cust_resp.text)
 
     return JSONResponse(status_code=204, content=None)
 
@@ -405,7 +494,8 @@ def create_address_for_customer(university_id: str, address: AddressCreate):
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Address service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Address service unavailable")
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
@@ -449,7 +539,8 @@ def update_address_for_customer(
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Address service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Address service unavailable")
 
     if resp.status_code == 404:
         raise HTTPException(
@@ -478,7 +569,8 @@ def delete_address_for_customer(university_id: str, address_id: str):
             timeout=15.0,
         )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Address service unavailable")
+        raise HTTPException(
+            status_code=502, detail="Address service unavailable")
 
     if resp.status_code == 404:
         raise HTTPException(
@@ -504,6 +596,7 @@ def root():
             "address": ADDRESS_SERVICE_URL,
         },
     }
+
 
 if __name__ == "__main__":
     import uvicorn

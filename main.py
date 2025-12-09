@@ -26,8 +26,8 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS")
+PROJECT_ID = os.getenv("GCP_PROJECT_ID", "cloud-computing-478817")
+PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS", "customerTopic")
 
 if PROJECT_ID and PUBSUB_TOPIC:
     publisher: pubsub_v1.PublisherClient | None = pubsub_v1.PublisherClient()

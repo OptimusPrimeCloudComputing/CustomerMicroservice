@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import base64
+
+from sqlalchemy.orm import composite
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
@@ -413,7 +415,17 @@ def update_customer(university_id: str, update: CustomerUpdate):
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-    return get_customer(university_id)
+    composite_updated = get_customer(university_id)
+    try:
+        publish_event(
+            "CustomerUpdated",
+            composite_updated.model_dump(mode="json"),
+        )
+    except Exception:
+        logger.exception("Error while publishing CustomerUpdated event")
+
+    return composite_updated
+
 
 
 @app.delete("/customers/{university_id}", status_code=204)
@@ -429,7 +441,8 @@ def delete_customer(university_id: str):
             f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses",
             timeout=15.0,
         )
-    except httpx.RequestError:
+    except httpx.RequestError as exc:
+        logger.exception("Address service request failed: %s", exc)
         raise HTTPException(
             status_code=502, detail="Address service unavailable")
 
@@ -442,7 +455,8 @@ def delete_customer(university_id: str):
             f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
             timeout=15.0,
         )
-    except httpx.RequestError:
+    except httpx.RequestError as exc:
+        logger.exception("Customer service request failed: %s", exc)
         raise HTTPException(
             status_code=502, detail="Customer service unavailable")
 
@@ -451,6 +465,17 @@ def delete_customer(university_id: str):
     if cust_resp.status_code >= 400:
         raise HTTPException(
             status_code=cust_resp.status_code, detail=cust_resp.text)
+
+    try:
+        publish_event(
+            "CustomerDeleted",
+            {
+                "university_id": university_id,
+                "deleted_at": datetime.now(UTC).isoformat() + "Z",
+            },
+        )
+    except Exception:
+        logger.exception("Error while publishing CustomerDeleted event")
 
     return JSONResponse(status_code=204, content=None)
 

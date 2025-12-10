@@ -43,5 +43,7 @@ urllib3==2.5.0
 uvicorn==0.37.0
 zipp==3.23.0
 sendgrid==6.10.0
+flask==3.0.3
+cloudevents==1.10.1
 google-api-python-client==2.97.0
 google-auth-httplib2==0.1.0

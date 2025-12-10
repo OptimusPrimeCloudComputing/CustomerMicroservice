@@ -5,6 +5,8 @@ import os
 import logging
 from typing import Dict
 
+from flask import Request, make_response
+from cloudevents.http import from_http
 
 import sendgrid
 from sendgrid.helpers.mail import Mail
@@ -81,29 +83,33 @@ def publish_send(to: str, subject: str, body: str) -> dict:
     return send_email_sendgrid(to, subject, body, sender)
 
 
-def gcf_send_email(event: dict, context) -> None:
-    """Entry point for Cloud Function triggered by Pub/Sub.
 
-    event: standard background function event for pubsub with 'data' (base64) and attributes.
-    context: event metadata (unused)
+# Cloud Functions 2nd Gen: HTTP trigger, CloudEvent (Eventarc Pub/Sub)
+def gcf_send_email(request: Request):
+    """
+    HTTP entry point for Cloud Functions 2nd Gen (Eventarc Pub/Sub trigger).
+    Expects a CloudEvent POSTed as JSON.
     """
     try:
-        data_b64 = event.get("data")
+        # Parse CloudEvent from HTTP request
+        event = from_http(request.headers, request.get_data())
+        # Pub/Sub message is in event.data["message"]["data"] (base64-encoded)
+        message = event.data.get("message", {})
+        data_b64 = message.get("data")
         if not data_b64:
             logger.error("No data in Pub/Sub message")
-            return
-
+            return make_response(("No data in Pub/Sub message", 400))
         payload_raw = base64.b64decode(data_b64).decode("utf-8")
         logger.info("Decoded pubsub data: %s", payload_raw)
         payload = json.loads(payload_raw)
     except Exception:
         logger.exception("Failed to decode/parse pubsub message")
-        return
+        return make_response(("Failed to decode/parse pubsub message", 400))
 
     to = payload.get("email")
     if not to:
         logger.error("No 'email' field in event payload; skipping")
-        return
+        return make_response(("No 'email' field in event payload", 400))
 
     subject = payload.get("subject") or f"Notification: {payload.get('event_type','Update') }"
     name = payload.get("name") or "User"
@@ -112,8 +118,10 @@ def gcf_send_email(event: dict, context) -> None:
     try:
         res = publish_send(to, subject, body)
         logger.info("Email sent via SendGrid: %s", res)
+        return make_response(("Email sent", 200))
     except Exception:
         logger.exception("Failed to send email via SendGrid API")
+        return make_response(("Failed to send email", 500))
 
 
 

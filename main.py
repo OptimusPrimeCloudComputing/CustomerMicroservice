@@ -6,6 +6,7 @@ import os
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, UTC
+from dotenv import load_dotenv
 from typing import List, Dict
 from uuid import uuid4
 
@@ -25,6 +26,8 @@ from utils.jwt_utils import create_access_token
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+load_dotenv()
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS")
@@ -52,6 +55,11 @@ ADDRESS_SERVICE_URL = os.environ.get(
     "ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app")
 
 executor = ThreadPoolExecutor(max_workers=4)
+
+# Toggle for local testing: when true, skip real Google verification
+USE_FAKE_GOOGLE = os.getenv("USE_FAKE_GOOGLE", "false").lower() == "true"
+print(USE_FAKE_GOOGLE, "USE_FAKE_GOOGLE")
+print(os.getenv("USE_FAKE_GOOGLE"), "ENV USE_FAKE_GOOGLE")
 
 app = FastAPI(
     title="Customer Composite API",
@@ -85,38 +93,41 @@ async def auth_google(body: GoogleAuthRequest):
     """Exchange Google ID token for app JWT.
 
     Expects body: {"credential": "<google_id_token>"}
-    For this assignment, we trust the frontend to send a valid token
-    and extract basic profile claims from it.
     """
     credential = body.credential
     if not credential:
         raise HTTPException(status_code=400, detail="Missing credential")
 
-    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
-    if not google_client_id:
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_CLIENT_ID not configured on server",
-        )
+    if USE_FAKE_GOOGLE:
+        # FAKE GOOGLE PATH FOR LOCAL TESTING
+        # We skip real Google verification and just mock a .edu user,
+        # so you can see the JWT and how Authorization should look.
+        email = "test@columbia.edu"
+        name = "Test User"
+        picture = "https://example.com/avatar.png"
+        sub = "test-user-123"
+    else:
+        google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+        if not google_client_id:
+            raise HTTPException(
+                status_code=500,
+                detail="GOOGLE_CLIENT_ID not configured on server",
+            )
 
-    try:
-        idinfo = id_token.verify_oauth2_token(
-            credential,
-            google_requests.Request(),
-            google_client_id,
-        )
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid Google ID token")
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                credential,
+                google_requests.Request(),
+                google_client_id,
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=401, detail="Invalid Google ID token")
 
-    email = idinfo.get("email")
-    name = idinfo.get("name") or "Google User"
-    picture = idinfo.get("picture")
-    sub = idinfo.get("sub")
-
-    # Optional: enforce .edu emails for this app
-    if not email or not email.endswith(".edu"):
-        raise HTTPException(
-            status_code=403, detail="Email must be a .edu address")
+        email = idinfo.get("email")
+        name = idinfo.get("name") or "Google User"
+        picture = idinfo.get("picture")
+        sub = idinfo.get("sub")
 
     jwt_payload = {
         "sub": sub,

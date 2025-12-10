@@ -92,7 +92,7 @@ class GoogleAuthRequest(BaseModel):
 
 def fetch_customer_by_email(email: str) -> Dict | None:
     """Query Customer Atomic Service to find a customer by email.
-    
+
     Returns the customer data if found, None otherwise.
     """
     try:
@@ -101,13 +101,15 @@ def fetch_customer_by_email(email: str) -> Dict | None:
             timeout=15.0,
         )
     except httpx.RequestError as exc:
-        logger.warning("Customer service request failed when looking up by email: %s", exc)
+        logger.warning(
+            "Customer service request failed when looking up by email: %s", exc)
         return None
 
     if resp.status_code == 404:
         return None
     if resp.status_code >= 400:
-        logger.warning("Customer service returned error %d: %s", resp.status_code, resp.text)
+        logger.warning("Customer service returned error %d: %s",
+                       resp.status_code, resp.text)
         return None
 
     return resp.json()
@@ -120,7 +122,7 @@ async def auth_google(body: GoogleAuthRequest):
     Expects body: {"credential": "<google_id_token>"}
     For this assignment, we trust the frontend to send a valid token
     and extract basic profile claims from it.
-    
+
     If the user already exists in the database (looked up by email),
     the response will include their university_id. The frontend can
     infer from the presence of university_id whether the user exists.
@@ -164,7 +166,7 @@ async def auth_google(body: GoogleAuthRequest):
     if not email or not email.endswith(".edu"):
         raise HTTPException(
             status_code=403, detail="Email must be a .edu address")
-    
+
     # Check if customer exists in database by email
     university_id = None
     existing_customer = fetch_customer_by_email(email)
@@ -483,7 +485,6 @@ def update_customer(university_id: str, update: CustomerUpdate):
     return composite_updated
 
 
-
 @app.delete("/customers/{university_id}", status_code=204)
 def delete_customer(university_id: str):
     """
@@ -664,6 +665,8 @@ def delete_address_for_customer(university_id: str, address_id: str):
     return JSONResponse(status_code=204, content=None)
 
 # python
+
+
 @app.get("/customers/by-email/{email}", response_model=CustomerRead)
 def get_customer_by_email(email: str, current_user: dict = Depends(get_current_user)):
     """
@@ -678,7 +681,8 @@ def get_customer_by_email(email: str, current_user: dict = Depends(get_current_u
 
     uni_id = customer_data.get("university_id")
     if not uni_id:
-        raise HTTPException(status_code=404, detail="Customer record missing university_id")
+        raise HTTPException(
+            status_code=404, detail="Customer record missing university_id")
 
     addresses_data = fetch_addresses_atomic(uni_id)
 
@@ -706,7 +710,6 @@ def get_customer_by_email(email: str, current_user: dict = Depends(get_current_u
     )
 
 
-
 # -----
 # Root
 # -----
@@ -720,9 +723,3 @@ def root():
             "address": ADDRESS_SERVICE_URL,
         },
     }
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

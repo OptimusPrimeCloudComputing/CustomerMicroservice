@@ -42,3 +42,6 @@ typing_extensions==4.15.0
 urllib3==2.5.0
 uvicorn==0.37.0
 zipp==3.23.0
+sendgrid==6.10.0
+google-api-python-client==2.97.0
+google-auth-httplib2==0.1.0

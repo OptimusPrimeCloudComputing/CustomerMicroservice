@@ -663,6 +663,49 @@ def delete_address_for_customer(university_id: str, address_id: str):
 
     return JSONResponse(status_code=204, content=None)
 
+# python
+@app.get("/customers/by-email/{email}", response_model=CustomerRead)
+def get_customer_by_email(email: str, current_user: dict = Depends(get_current_user)):
+    """
+    Composite lookup by email:
+    - Query Customer Atomic by email to obtain the customer (including university_id).
+    - Fetch addresses by the returned university_id.
+    - Aggregate into CustomerRead.
+    """
+    customer_data = fetch_customer_by_email(email)
+    if not customer_data:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    uni_id = customer_data.get("university_id")
+    if not uni_id:
+        raise HTTPException(status_code=404, detail="Customer record missing university_id")
+
+    addresses_data = fetch_addresses_atomic(uni_id)
+
+    address_objs = [
+        AddressBase(
+            street=a["street"],
+            city=a["city"],
+            state=a["state"],
+            postal_code=a["postal_code"],
+            country=a["country"],
+        )
+        for a in addresses_data
+    ]
+
+    base_fields = {
+        k: v
+        for k, v in customer_data.items()
+        if k not in ("customer_id", "address")
+    }
+
+    return CustomerRead(
+        customer_id=uuid4(),
+        address=address_objs,
+        **base_fields,
+    )
+
+
 
 # -----
 # Root

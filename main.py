@@ -16,6 +16,8 @@ from pydantic import BaseModel
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import base64
+
+from sqlalchemy.orm import composite
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from models.address import AddressBase, AddressRead, AddressCreate, AddressUpdate
@@ -29,8 +31,8 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS")
+PROJECT_ID = os.getenv("GCP_PROJECT_ID", "cloud-computing-478817")
+PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC_CUSTOMER_EVENTS", "customerTopic")
 
 if PROJECT_ID and PUBSUB_TOPIC:
     publisher: pubsub_v1.PublisherClient | None = pubsub_v1.PublisherClient()
@@ -88,11 +90,40 @@ class GoogleAuthRequest(BaseModel):
     }
 
 
+def fetch_customer_by_email(email: str) -> Dict | None:
+    """Query Customer Atomic Service to find a customer by email.
+    
+    Returns the customer data if found, None otherwise.
+    """
+    try:
+        resp = httpx.get(
+            f"{CUSTOMER_SERVICE_URL}/customers/by-email/{email}",
+            timeout=15.0,
+        )
+    except httpx.RequestError as exc:
+        logger.warning("Customer service request failed when looking up by email: %s", exc)
+        return None
+
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.warning("Customer service returned error %d: %s", resp.status_code, resp.text)
+        return None
+
+    return resp.json()
+
+
 @app.post("/auth/google")
 async def auth_google(body: GoogleAuthRequest):
     """Exchange Google ID token for app JWT.
 
     Expects body: {"credential": "<google_id_token>"}
+    For this assignment, we trust the frontend to send a valid token
+    and extract basic profile claims from it.
+    
+    If the user already exists in the database (looked up by email),
+    the response will include their university_id. The frontend can
+    infer from the presence of university_id whether the user exists.
     """
     credential = body.credential
     if not credential:
@@ -129,11 +160,26 @@ async def auth_google(body: GoogleAuthRequest):
         picture = idinfo.get("picture")
         sub = idinfo.get("sub")
 
+    # Optional: enforce .edu emails for this app
+    if not email or not email.endswith(".edu"):
+        raise HTTPException(
+            status_code=403, detail="Email must be a .edu address")
+    
+    # Check if customer exists in database by email
+    university_id = None
+    existing_customer = fetch_customer_by_email(email)
+    if existing_customer:
+        university_id = existing_customer.get("university_id")
+
+    # Build JWT payload, include university_id if customer exists
     jwt_payload = {
         "sub": sub,
         "email": email,
         "name": name,
     }
+    if university_id:
+        jwt_payload["university_id"] = university_id
+
     app_token = create_access_token(jwt_payload)
 
     return {
@@ -143,6 +189,7 @@ async def auth_google(body: GoogleAuthRequest):
             "email": email,
             "name": name,
             "picture": picture,
+            "university_id": university_id,
         },
     }
 
@@ -424,7 +471,17 @@ def update_customer(university_id: str, update: CustomerUpdate):
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-    return get_customer(university_id)
+    composite_updated = get_customer(university_id)
+    try:
+        publish_event(
+            "CustomerUpdated",
+            composite_updated.model_dump(mode="json"),
+        )
+    except Exception:
+        logger.exception("Error while publishing CustomerUpdated event")
+
+    return composite_updated
+
 
 
 @app.delete("/customers/{university_id}", status_code=204)
@@ -440,7 +497,8 @@ def delete_customer(university_id: str):
             f"{ADDRESS_SERVICE_URL}/customers/{university_id}/addresses",
             timeout=15.0,
         )
-    except httpx.RequestError:
+    except httpx.RequestError as exc:
+        logger.exception("Address service request failed: %s", exc)
         raise HTTPException(
             status_code=502, detail="Address service unavailable")
 
@@ -453,7 +511,8 @@ def delete_customer(university_id: str):
             f"{CUSTOMER_SERVICE_URL}/customers/{university_id}",
             timeout=15.0,
         )
-    except httpx.RequestError:
+    except httpx.RequestError as exc:
+        logger.exception("Customer service request failed: %s", exc)
         raise HTTPException(
             status_code=502, detail="Customer service unavailable")
 
@@ -462,6 +521,17 @@ def delete_customer(university_id: str):
     if cust_resp.status_code >= 400:
         raise HTTPException(
             status_code=cust_resp.status_code, detail=cust_resp.text)
+
+    try:
+        publish_event(
+            "CustomerDeleted",
+            {
+                "university_id": university_id,
+                "deleted_at": datetime.now(UTC).isoformat() + "Z",
+            },
+        )
+    except Exception:
+        logger.exception("Error while publishing CustomerDeleted event")
 
     return JSONResponse(status_code=204, content=None)
 

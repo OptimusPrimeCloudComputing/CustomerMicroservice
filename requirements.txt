@@ -43,3 +43,6 @@ urllib3==2.5.0
 uvicorn==0.37.0
 zipp==3.23.0
 python-dotenv==1.0.1
+functions-framework==3.*
+sendgrid==6.*
+cloudevents==1.*

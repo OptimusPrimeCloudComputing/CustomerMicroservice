@@ -49,7 +49,7 @@ else:
         "Pub/Sub DISABLED for composite: GCP_PROJECT_ID or PUBSUB_TOPIC_CUSTOMER_EVENTS not set"
     )
 
-port = int(os.environ.get("FASTAPIPORT", 8080))
+port = int(os.environ.get("PORT", 8002))
 
 CUSTOMER_SERVICE_URL = os.environ.get(
     "CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app")

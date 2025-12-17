@@ -20,7 +20,7 @@ EduEmail = Annotated[
 
 UniversityIDType = Annotated[
     str,
-    StringConstraints(pattern=r"^[A-Z]{2,4}\d{3,4}$"),  # e.g. UNI1234, CS4111
+    StringConstraints(pattern=r"^[A-Za-z]{2,4}\d{3,4}$"),  # e.g. UNI1234, cs4111
 ]
 
 

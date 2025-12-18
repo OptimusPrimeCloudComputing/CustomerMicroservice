@@ -9,7 +9,7 @@ from typing_extensions import Annotated
 
 # University ID like UNI1234
 UniversityIDType = Annotated[
-    str,StringConstraints(pattern=r"^[A-Z]{2,4}\d{3,4}$"),
+    str,StringConstraints(pattern=r"^[A-Za-z]{2,4}\d{3,4}$"),
 ]
 
 

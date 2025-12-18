@@ -52,7 +52,7 @@ else:
 port = int(os.environ.get("PORT", 8002))
 
 CUSTOMER_SERVICE_URL = os.environ.get(
-    "CUSTOMER_SERVICE_URL", "https://customer-atomic-service-453095374298.europe-west1.run.app")
+    "CUSTOMER_SERVICE_URL", "https://customer-atomic-service-v2-453095374298.us-east5.run.app")
 ADDRESS_SERVICE_URL = os.environ.get(
     "ADDRESS_SERVICE_URL", "https://customer-address-atomic-service-453095374298.europe-west1.run.app")
 
